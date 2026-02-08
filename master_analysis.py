@@ -9,7 +9,11 @@ import statsmodels.formula.api as smf
 
 # FILTERS
 ATTENTION_CHECK_TARGET = 5      # Value for "Somewhat Agree" on Q2_8
-MIN_DURATION_SECONDS = 90       # Minimum time (lowered slightly to be safe)
+MIN_DURATION_SECONDS = 90       # Minimum time
+
+
+SHOPPING_COL = 'Q5'
+MIN_SHOPPING_FREQ = 6
 
 # MANIPULATION CHECK SETTINGS 
 AUDIO_TARGET_VAL = 3  
@@ -25,32 +29,36 @@ def clean_and_process(filename, label, start_date_cutoff, target_manipulation_va
     df = pd.read_csv(filename, skiprows=[1, 2])
     df['RecordedDate'] = pd.to_datetime(df['RecordedDate'])
     
-    # 1. DATE FILTER
+    #DATE FILTER this is for the people we did before we fixed the survey after your feedback.
     n_original = len(df)
     df_clean = df[df['RecordedDate'] >= start_date_cutoff].copy()
     dropped_pilot = n_original - len(df_clean)
     
-    # Coerce numeric
-    cols_to_numeric = flow_items + [attn_col, manip_col, 'Duration (in seconds)', 'Finished']
+    #Coerce numeric (Added SHOPPING_COL here)
+    cols_to_numeric = flow_items + [attn_col, manip_col, 'Duration (in seconds)', 'Finished', SHOPPING_COL]
     for col in cols_to_numeric:
         df_clean[col] = pd.to_numeric(df_clean[col], errors='coerce')
 
-    # 2. FINISHED & DURATION
+    #FINISHED & DURATION
     df_clean = df_clean[df_clean['Finished'] == 1]
     n_before_speed = len(df_clean)
     df_clean = df_clean[df_clean['Duration (in seconds)'] >= MIN_DURATION_SECONDS]
     dropped_speed = n_before_speed - len(df_clean)
 
-    # 3. ATTENTION CHECK
+    #ATTENTION CHECK
     n_before_attn = len(df_clean)
     df_clean = df_clean[df_clean[attn_col] == ATTENTION_CHECK_TARGET]
     dropped_attn = n_before_attn - len(df_clean)
 
-    # 4. MANIPULATION CHECK (Did they hear the sound?)
-    # We remove people who gave the WRONG answer for their condition
+    #MANIPULATION CHECK (Did they hear the sound?)
     n_before_manip = len(df_clean)
     df_clean = df_clean[df_clean[manip_col] == target_manipulation_val]
     dropped_manip = n_before_manip - len(df_clean)
+
+    #SHOPPING FREQUENCY FILTER
+    n_before_freq = len(df_clean)
+    df_clean = df_clean[df_clean[SHOPPING_COL] <= MIN_SHOPPING_FREQ]
+    dropped_freq = n_before_freq - len(df_clean)
 
     # Calculate Flow
     df_clean['Flow_Score'] = df_clean[flow_items].mean(axis=1)
@@ -60,8 +68,9 @@ def clean_and_process(filename, label, start_date_cutoff, target_manipulation_va
     print(f"Original N: {n_original}")
     print(f"Date Filter Removed: {dropped_pilot}")
     print(f"Speedsters Removed: {dropped_speed}")
+    print(f"Infrequent Shoppers Removed: {dropped_freq}")
     print(f"Attention Check Failed: {dropped_attn}")
-    print(f"Manipulation Check Failed: {dropped_manip} (Wrong answer to 'Did you notice sound?')")
+    print(f"Manipulation Check Failed: {dropped_manip}")
     print(f"FINAL VALID N: {len(df_clean)}\n")
     
     return df_clean
@@ -71,8 +80,7 @@ file_soundless = 'Qualtrics_Survey_Soundless.csv'
 file_sound = 'Qualtrics_Survey_Sound.csv'
 
 try:
-    # SILENT GROUP: 
-    # Keep Jan data + Require them to answer SILENT_TARGET_VAL (e.g., No)
+    # SILENT GROUP
     df_silent = clean_and_process(
         file_soundless, 
         'Silent', 
@@ -80,8 +88,7 @@ try:
         target_manipulation_val=SILENT_TARGET_VAL 
     )
     
-    # AUDIO GROUP:
-    # Remove Jan data + Require them to answer AUDIO_TARGET_VAL (e.g., Yes)
+    # AUDIO GROUP
     df_audio = clean_and_process(
         file_sound, 
         'Auditory', 
@@ -113,13 +120,13 @@ try:
         # Plot
         plt.figure(figsize=(8, 6))
         sns.violinplot(x='Condition', y='Flow_Score', data=df_all, inner='stick', palette='muted')
-        plt.title("Flow Scores (Participants who PASSED Manipulation Check)")
+        plt.title("Flow Scores (Participants who PASSED Checks)")
         plt.show()
 
 except Exception as e:
     print(f"Error: {e}")
 
-if len(df_all) > 10: # Ensure enough data exists
+if 'df_all' in locals() and len(df_all) > 10: 
     print("\n" + "="*30)
     print("--- EXPLORATORY MODERATOR ANALYSIS ---")
     print("="*30)
@@ -127,15 +134,13 @@ if len(df_all) > 10: # Ensure enough data exists
     # 1. Prepare Variables
     df_all['Condition_Code'] = df_all['Condition'].apply(lambda x: 1 if x == 'Auditory' else 0)
     
-    # Rename columns to be statsmodels-friendly (no spaces/questions)
     df_all = df_all.rename(columns={
         'Q4': 'Gender', 
         'Q5': 'Shopping_Freq',
         'Q3': 'Age_Num'
     })
 
-    # --- MODEL A: Does Gender moderate the effect of Sound? ---
-    # Formula: Flow ~ Sound + Gender + (Sound * Gender)
+    # --- MODEL A: Gender ---
     try:
         model_gender = smf.ols("Flow_Score ~ Condition_Code * C(Gender)", data=df_all).fit()
         print("\n[ Interaction Check: GENDER ]")
@@ -143,8 +148,7 @@ if len(df_all) > 10: # Ensure enough data exists
     except Exception as e:
         print(f"Gender analysis failed: {e}")
 
-    # --- MODEL B: Does Shopping Frequency moderate the effect of Sound? ---
-    # Formula: Flow ~ Sound + Frequency + (Sound * Frequency)
+    # --- MODEL B: Shopping Frequency ---
     try:
         model_freq = smf.ols("Flow_Score ~ Condition_Code * Shopping_Freq", data=df_all).fit()
         print("\n[ Interaction Check: SHOPPING FREQUENCY ]")
