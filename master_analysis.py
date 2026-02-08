@@ -3,19 +3,16 @@ import numpy as np
 from scipy import stats
 import seaborn as sns
 import matplotlib.pyplot as plt
+import statsmodels.formula.api as smf
 
-# ---------------------------------------------------------
-# 1. CONFIGURATION
-# ---------------------------------------------------------
+# CONFIGURATION
+
 # FILTERS
 ATTENTION_CHECK_TARGET = 5      # Value for "Somewhat Agree" on Q2_8
 MIN_DURATION_SECONDS = 90       # Minimum time (lowered slightly to be safe)
 
-# MANIPULATION CHECK SETTINGS (CRITICAL: CHECK YOUR QUALTRICS VALUES)
-# What number means "Yes, I heard it"? (For Audio Group)
+# MANIPULATION CHECK SETTINGS 
 AUDIO_TARGET_VAL = 3  
-# What number means "No, I didn't hear it"? (For Silent Group)
-# NOTE: Your data showed '5' for silent. Verify if 5 means "No" or "Strongly Disagree".
 SILENT_TARGET_VAL = 5  
 
 # Columns
@@ -23,9 +20,7 @@ flow_items = ['Q2_1', 'Q2_2', 'Q2_3', 'Q2_4', 'Q2_5', 'Q2_6', 'Q2_7', 'Q2_9', 'Q
 attn_col = 'Q2_8'
 manip_col = 'Q1' # "Did you notice a sound?"
 
-# ---------------------------------------------------------
 # 2. CLEANING FUNCTION
-# ---------------------------------------------------------
 def clean_and_process(filename, label, start_date_cutoff, target_manipulation_val):
     df = pd.read_csv(filename, skiprows=[1, 2])
     df['RecordedDate'] = pd.to_datetime(df['RecordedDate'])
@@ -71,9 +66,7 @@ def clean_and_process(filename, label, start_date_cutoff, target_manipulation_va
     
     return df_clean
 
-# ---------------------------------------------------------
 # 3. EXECUTION
-# ---------------------------------------------------------
 file_soundless = 'Qualtrics_Survey_Soundless.csv' 
 file_sound = 'Qualtrics_Survey_Sound.csv'
 
@@ -125,3 +118,51 @@ try:
 
 except Exception as e:
     print(f"Error: {e}")
+
+if len(df_all) > 10: # Ensure enough data exists
+    print("\n" + "="*30)
+    print("--- EXPLORATORY MODERATOR ANALYSIS ---")
+    print("="*30)
+
+    # 1. Prepare Variables
+    df_all['Condition_Code'] = df_all['Condition'].apply(lambda x: 1 if x == 'Auditory' else 0)
+    
+    # Rename columns to be statsmodels-friendly (no spaces/questions)
+    df_all = df_all.rename(columns={
+        'Q4': 'Gender', 
+        'Q5': 'Shopping_Freq',
+        'Q3': 'Age_Num'
+    })
+
+    # --- MODEL A: Does Gender moderate the effect of Sound? ---
+    # Formula: Flow ~ Sound + Gender + (Sound * Gender)
+    try:
+        model_gender = smf.ols("Flow_Score ~ Condition_Code * C(Gender)", data=df_all).fit()
+        print("\n[ Interaction Check: GENDER ]")
+        print(model_gender.summary().tables[1])
+    except Exception as e:
+        print(f"Gender analysis failed: {e}")
+
+    # --- MODEL B: Does Shopping Frequency moderate the effect of Sound? ---
+    # Formula: Flow ~ Sound + Frequency + (Sound * Frequency)
+    try:
+        model_freq = smf.ols("Flow_Score ~ Condition_Code * Shopping_Freq", data=df_all).fit()
+        print("\n[ Interaction Check: SHOPPING FREQUENCY ]")
+        print(model_freq.summary().tables[1])
+    except Exception as e:
+        print(f"Freq analysis failed: {e}")
+
+    plt.figure(figsize=(10, 5))
+    
+    plt.subplot(1, 2, 1)
+    sns.pointplot(data=df_all, x='Condition', y='Flow_Score', hue='Gender', errorbar='se')
+    plt.title("Interaction: Gender")
+
+    plt.subplot(1, 2, 2)
+    sns.regplot(data=df_all[df_all['Condition']=='Silent'], x='Shopping_Freq', y='Flow_Score', color='blue', label='Silent', scatter_kws={'alpha':0.3})
+    sns.regplot(data=df_all[df_all['Condition']=='Auditory'], x='Shopping_Freq', y='Flow_Score', color='orange', label='Audio', scatter_kws={'alpha':0.3})
+    plt.legend()
+    plt.title("Interaction: Shopping Freq")
+    
+    plt.tight_layout()
+    plt.show()
